@@ -19,7 +19,10 @@ import contactRoutes from "./routes/contact.route.js";
 import { app, server } from "./lib/socket.js";
 
 const PORT = process.env.PORT || 3000;
-const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
+
+// In production, frontend and backend are served from the same origin.
+// FRONTEND_URL can still be provided through environment variables if needed.
+const FRONTEND_URL = process.env.FRONTEND_URL || true;
 
 const publicDir = path.join(process.cwd(), "public");
 
@@ -36,6 +39,12 @@ app.use(
 
 app.use(express.json());
 
+/*
+  CORS
+  - Local development can use FRONTEND_URL from .env.
+  - Production uses the same origin because frontend and backend
+    are served by the same Render service.
+*/
 app.use(
   cors({
     origin: FRONTEND_URL,
@@ -45,20 +54,31 @@ app.use(
 
 app.use(clerkMiddleware());
 
+/*
+  Health check
+*/
 app.get("/health", (req, res) => {
   res.status(200).json({ ok: true });
 });
 
-// Authentication
+/*
+  Authentication
+*/
 app.use("/api/auth", authRoutes);
 
-// Messages
+/*
+  Messages
+*/
 app.use("/api/messages", messageRoutes);
 
-// Contacts / Add User / Requests
+/*
+  Contacts / Add User / Requests
+*/
 app.use("/api/contacts", contactRoutes);
 
-// Serve frontend in production.
+/*
+  Serve React frontend in production.
+*/
 if (fs.existsSync(publicDir)) {
   app.use(express.static(publicDir));
 
@@ -67,6 +87,9 @@ if (fs.existsSync(publicDir)) {
   });
 }
 
+/*
+  Start server
+*/
 server.listen(PORT, () => {
   connectDB();
 

@@ -5,12 +5,15 @@ import { Server } from "socket.io";
 const app = express();
 const server = http.createServer(app);
 
+// In production, frontend and backend use the same origin.
+// FRONTEND_URL can still be provided through environment variables.
 const allowedOrigin =
-  process.env.FRONTEND_URL || "http://localhost:5173";
+  process.env.FRONTEND_URL || true;
 
 const io = new Server(server, {
   cors: {
-    origin: [allowedOrigin],
+    origin: allowedOrigin,
+    credentials: true,
   },
 });
 
