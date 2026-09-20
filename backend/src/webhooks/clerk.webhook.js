@@ -4,25 +4,9 @@ import { verifyWebhook } from "@clerk/backend/webhooks";
 
 const router = express.Router();
 
-/*
-  Clerk sends user events to this webhook.
-
-  Important:
-  - user.created  -> create user in MongoDB
-  - user.updated  -> update user in MongoDB
-  - user.deleted  -> remove user from MongoDB
-
-  This means we NEVER manually create fake users from the frontend.
-  Only real Clerk users can appear in the Talksy Users list.
-*/
-
 router.post("/", async (req, res) => {
   try {
     console.log("🔥 CLERK WEBHOOK RECEIVED");
-
-    // ---------------------------------------------------------
-    // 1. Get the webhook signing secret
-    // ---------------------------------------------------------
 
     const signingSecret = process.env.CLERK_WEBHOOK_SIGNING_SECRET;
 
@@ -34,30 +18,23 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // ---------------------------------------------------------
-    // 2. Clerk requires the ORIGINAL raw request body
-    // ---------------------------------------------------------
-
+    // Clerk webhook body must remain the original raw body
+    // for signature verification.
     const payload = Buffer.isBuffer(req.body)
       ? req.body.toString("utf8")
-      : String(req.body);
+      : JSON.stringify(req.body);
 
-    /*
-      Re-create a Web Request because Clerk's verifyWebhook()
-      expects a Web Request object.
-    */
+    console.log("📦 Webhook body type:", typeof req.body);
+    console.log("📦 Is Buffer:", Buffer.isBuffer(req.body));
 
-    const request = new Request("http://localhost/webhooks/clerk", {
-      method: "POST",
-
-      headers: new Headers(req.headers),
-
-      body: payload,
-    });
-
-    // ---------------------------------------------------------
-    // 3. Verify that the webhook actually came from Clerk
-    // ---------------------------------------------------------
+    const request = new Request(
+      "http://localhost/webhooks/clerk",
+      {
+        method: "POST",
+        headers: new Headers(req.headers),
+        body: payload,
+      },
+    );
 
     const event = await verifyWebhook(request, {
       signingSecret,
@@ -65,25 +42,25 @@ router.post("/", async (req, res) => {
 
     console.log("✅ Clerk webhook verified");
     console.log("📦 Event type:", event.type);
+    console.log("📦 Event data:", JSON.stringify(event.data, null, 2));
 
-    // ---------------------------------------------------------
-    // 4. USER CREATED / UPDATED
-    // ---------------------------------------------------------
+    // =====================================================
+    // USER CREATED / UPDATED
+    // =====================================================
 
-    if (event.type === "user.created" || event.type === "user.updated") {
+    if (
+      event.type === "user.created" ||
+      event.type === "user.updated"
+    ) {
       const clerkUser = event.data;
 
-      // Find the primary email
       const email =
         clerkUser.email_addresses?.find(
           (emailAddress) =>
-            emailAddress.id === clerkUser.primary_email_address_id,
+            emailAddress.id ===
+            clerkUser.primary_email_address_id,
         )?.email_address ||
         clerkUser.email_addresses?.[0]?.email_address;
-
-      // -------------------------------------------------------
-      // Make a readable full name
-      // -------------------------------------------------------
 
       const fullName =
         [clerkUser.first_name, clerkUser.last_name]
@@ -93,15 +70,7 @@ router.post("/", async (req, res) => {
         email?.split("@")[0] ||
         "Talksy User";
 
-      // -------------------------------------------------------
-      // Profile picture
-      // -------------------------------------------------------
-
       const profilePic = clerkUser.image_url || "";
-
-      // -------------------------------------------------------
-      // Make sure the important Clerk data exists
-      // -------------------------------------------------------
 
       if (!clerkUser.id) {
         console.error("❌ Clerk user ID is missing");
@@ -121,15 +90,10 @@ router.post("/", async (req, res) => {
         });
       }
 
-      // -------------------------------------------------------
-      // Create or update the MongoDB user
-      // -------------------------------------------------------
-
       const user = await User.findOneAndUpdate(
         {
           clerkId: clerkUser.id,
         },
-
         {
           $set: {
             clerkId: clerkUser.id,
@@ -138,7 +102,6 @@ router.post("/", async (req, res) => {
             profilePic,
           },
         },
-
         {
           new: true,
           upsert: true,
@@ -147,6 +110,7 @@ router.post("/", async (req, res) => {
       );
 
       console.log("✅ Talksy user synced:");
+
       console.log({
         id: user._id,
         clerkId: user.clerkId,
@@ -155,15 +119,17 @@ router.post("/", async (req, res) => {
       });
     }
 
-    // ---------------------------------------------------------
-    // 5. USER DELETED
-    // ---------------------------------------------------------
+    // =====================================================
+    // USER DELETED
+    // =====================================================
 
     if (event.type === "user.deleted") {
       const clerkUserId = event.data.id;
 
       if (!clerkUserId) {
-        console.error("❌ Deleted Clerk user ID is missing");
+        console.error(
+          "❌ Deleted Clerk user ID is missing",
+        );
 
         return res.status(400).json({
           message: "Deleted user ID is missing",
@@ -176,6 +142,7 @@ router.post("/", async (req, res) => {
 
       if (deletedUser) {
         console.log("🗑️ Talksy user deleted:");
+
         console.log({
           clerkId: deletedUser.clerkId,
           email: deletedUser.email,
@@ -189,16 +156,15 @@ router.post("/", async (req, res) => {
       }
     }
 
-    // ---------------------------------------------------------
-    // 6. Tell Clerk that the webhook was successfully processed
-    // ---------------------------------------------------------
+    // =====================================================
+    // SUCCESS
+    // =====================================================
 
     return res.status(200).json({
       received: true,
     });
   } catch (error) {
     console.error("❌ Error processing Clerk webhook:");
-
     console.error(error);
 
     return res.status(400).json({
