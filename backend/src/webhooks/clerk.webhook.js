@@ -1,6 +1,6 @@
 import express from "express";
 import User from "../models/user.model.js";
-import { verifyWebhook } from "@clerk/backend/webhooks";
+import { verifyWebhook } from "@clerk/express/webhooks";
 
 const router = express.Router();
 
@@ -8,41 +8,12 @@ router.post("/", async (req, res) => {
   try {
     console.log("🔥 CLERK WEBHOOK RECEIVED");
 
-    const signingSecret = process.env.CLERK_WEBHOOK_SIGNING_SECRET;
-
-    if (!signingSecret) {
-      console.error("❌ CLERK_WEBHOOK_SIGNING_SECRET is missing");
-
-      return res.status(503).json({
-        message: "Webhook secret is not configured",
-      });
-    }
-
-    // Clerk webhook body must remain the original raw body
-    // for signature verification.
-    const payload = Buffer.isBuffer(req.body)
-      ? req.body.toString("utf8")
-      : JSON.stringify(req.body);
-
-    console.log("📦 Webhook body type:", typeof req.body);
-    console.log("📦 Is Buffer:", Buffer.isBuffer(req.body));
-
-    const request = new Request(
-      "http://localhost/webhooks/clerk",
-      {
-        method: "POST",
-        headers: new Headers(req.headers),
-        body: payload,
-      },
-    );
-
-    const event = await verifyWebhook(request, {
-      signingSecret,
+    const event = await verifyWebhook(req, {
+      signingSecret: process.env.CLERK_WEBHOOK_SIGNING_SECRET,
     });
 
     console.log("✅ Clerk webhook verified");
     console.log("📦 Event type:", event.type);
-    console.log("📦 Event data:", JSON.stringify(event.data, null, 2));
 
     // =====================================================
     // USER CREATED / UPDATED
@@ -54,23 +25,29 @@ router.post("/", async (req, res) => {
     ) {
       const clerkUser = event.data;
 
+      console.log("👤 Clerk user ID:", clerkUser.id);
+
       const email =
         clerkUser.email_addresses?.find(
           (emailAddress) =>
             emailAddress.id ===
             clerkUser.primary_email_address_id,
         )?.email_address ||
-        clerkUser.email_addresses?.[0]?.email_address;
+        clerkUser.email_addresses?.[0]?.email_address ||
+        null;
 
       const fullName =
         [clerkUser.first_name, clerkUser.last_name]
           .filter(Boolean)
-          .join(" ") ||
+          .join(" ")
+          .trim() ||
         clerkUser.username ||
-        email?.split("@")[0] ||
         "Talksy User";
 
-      const profilePic = clerkUser.image_url || "";
+      const profilePic =
+        clerkUser.image_url ||
+        clerkUser.profile_image_url ||
+        "";
 
       if (!clerkUser.id) {
         console.error("❌ Clerk user ID is missing");
@@ -80,13 +57,19 @@ router.post("/", async (req, res) => {
         });
       }
 
+      // If Clerk doesn't provide email in this event,
+      // don't crash the webhook.
+      //
+      // This is especially useful for Clerk test events.
       if (!email) {
-        console.error(
-          `❌ No email found for Clerk user: ${clerkUser.id}`,
+        console.warn(
+          "⚠️ Clerk webhook has no email. Skipping database sync for this event.",
         );
 
-        return res.status(400).json({
-          message: "User email is missing",
+        return res.status(200).json({
+          received: true,
+          synced: false,
+          reason: "No email provided by Clerk event",
         });
       }
 
@@ -155,10 +138,6 @@ router.post("/", async (req, res) => {
         );
       }
     }
-
-    // =====================================================
-    // SUCCESS
-    // =====================================================
 
     return res.status(200).json({
       received: true,
